@@ -330,7 +330,11 @@ namespace Genbox.VelcroPhysics.Dynamics.Joints
         public Vector2 LocalYAxisA => _localYAxisA;
 
         /// <summary>Get the reference angle.</summary>
-        public float ReferenceAngle => _referenceAngle;
+        public float ReferenceAngle
+        {
+            get => _referenceAngle;
+            internal set => _referenceAngle = value;
+        }
 
         /// <summary>Get the current motor force given the inverse time step, usually in N.</summary>
         public float GetMotorForce(float invDt)

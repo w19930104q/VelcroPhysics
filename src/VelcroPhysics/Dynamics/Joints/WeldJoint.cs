@@ -141,7 +141,11 @@ namespace Genbox.VelcroPhysics.Dynamics.Joints
         }
 
         /// <summary>The bodyB angle minus bodyA angle in the reference state (radians).</summary>
-        public float ReferenceAngle => _referenceAngle;
+        public float ReferenceAngle
+        {
+            get => _referenceAngle;
+            internal set => _referenceAngle = value;
+        }
 
         /// <summary>
         /// The frequency of the joint. A higher frequency means a stiffer joint, but a too high value can cause the joint

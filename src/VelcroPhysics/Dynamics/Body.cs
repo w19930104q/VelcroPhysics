@@ -104,6 +104,124 @@ namespace Genbox.VelcroPhysics.Dynamics
             _userData = def.UserData;
         }
 
+        /// <summary>Used by <see cref="WorldCloner" /> to create an instance whose state is copied field by field.</summary>
+        internal Body()
+        {
+            _fixtureList = new List<Fixture>(1);
+        }
+
+        /// <summary>Creates a deep copy of this body. Fixtures (and their shapes) are copied too; world and graph links are not.</summary>
+        internal Body CloneDeep()
+        {
+            Body copy = new Body
+            {
+                _type = _type,
+                _flags = _flags & ~BodyFlags.IslandFlag,
+                _xf = _xf,
+                _sweep = _sweep,
+                _linearVelocity = _linearVelocity,
+                _angularVelocity = _angularVelocity,
+                _linearDamping = _linearDamping,
+                _angularDamping = _angularDamping,
+                _gravityScale = _gravityScale,
+                _mass = _mass,
+                _invMass = _invMass,
+                _inertia = _inertia,
+                _invI = _invI,
+                _sleepTime = _sleepTime,
+                _force = Vector2.Zero,
+                _torque = 0.0f,
+                _world = null,
+                _jointList = null,
+                _contactList = null,
+                _islandIndex = 0,
+                _controllerFilter = _controllerFilter,
+                _physicsLogicFilter = _physicsLogicFilter,
+                _userData = _userData
+            };
+
+            copy._fixtureList = new List<Fixture>(_fixtureList.Count);
+            foreach (Fixture fixture in _fixtureList)
+            {
+                copy._fixtureList.Add(fixture.CloneDeep(copy));
+            }
+
+            return copy;
+        }
+
+        /// <summary>
+        /// Rebuilds a body (with its fixtures) from a <see cref="BodySnapshot" />. The resulting body is not attached to
+        /// any world; the caller adds it (via <see cref="World.AddBodyWithProxies" />).
+        /// </summary>
+        internal static Body CreateFromSnapshot(BodySnapshot snapshot)
+        {
+            Body body = new Body
+            {
+                _type = snapshot.BodyType,
+                _flags = snapshot.Flags,
+                _linearVelocity = snapshot.LinearVelocity,
+                _angularVelocity = snapshot.AngularVelocity,
+                _linearDamping = snapshot.LinearDamping,
+                _angularDamping = snapshot.AngularDamping,
+                _gravityScale = snapshot.GravityScale,
+                _mass = snapshot.Mass,
+                _inertia = snapshot.Inertia,
+                _sleepTime = snapshot.SleepTime,
+                _userData = snapshot.UserData
+            };
+
+            if (body._mass > 0.0f)
+                body._invMass = 1.0f / body._mass;
+
+            if (body._inertia > 0.0f && (body._flags & BodyFlags.FixedRotationFlag) == 0)
+                body._invI = 1.0f / body._inertia;
+
+            body._xf.p = snapshot.Position;
+            body._xf.q.Set(snapshot.Angle);
+            body._sweep.C0 = snapshot.Position;
+            body._sweep.C = snapshot.Position;
+            body._sweep.A0 = snapshot.Angle;
+            body._sweep.A = snapshot.Angle;
+            body._sweep.LocalCenter = snapshot.LocalCenter;
+
+            body._fixtureList = new List<Fixture>(snapshot.Fixtures.Count);
+            foreach (FixtureSnapshot fixtureSnapshot in snapshot.Fixtures)
+            {
+                body._fixtureList.Add(Fixture.CreateFromSnapshot(fixtureSnapshot, body));
+            }
+
+            return body;
+        }
+
+        /// <summary>Captures this body (and all of its fixtures) into a serializable <see cref="BodySnapshot" />.</summary>
+        internal BodySnapshot CreateSnapshot()
+        {
+            BodySnapshot snapshot = new BodySnapshot
+            {
+                BodyType = _type,
+                Flags = _flags & ~BodyFlags.IslandFlag,
+                Position = _xf.p,
+                Angle = _sweep.A,
+                LocalCenter = _sweep.LocalCenter,
+                LinearVelocity = _linearVelocity,
+                AngularVelocity = _angularVelocity,
+                LinearDamping = _linearDamping,
+                AngularDamping = _angularDamping,
+                GravityScale = _gravityScale,
+                Mass = _mass,
+                Inertia = _inertia,
+                SleepTime = _sleepTime,
+                UserData = _userData
+            };
+
+            foreach (Fixture fixture in _fixtureList)
+            {
+                snapshot.Fixtures.Add(fixture.CreateSnapshot());
+            }
+
+            return snapshot;
+        }
+
         public ControllerFilter ControllerFilter
         {
             get => _controllerFilter;

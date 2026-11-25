@@ -589,6 +589,90 @@ namespace Genbox.VelcroPhysics.Dynamics
             ProcessChanges();
         }
 
+        /// <summary>
+        /// Creates a deep copy of this world. The returned world contains brand new bodies, fixtures and joints - none
+        /// of the mutable objects of this world are shared with the clone. Contacts are rebuilt on the clone's first time step.
+        /// </summary>
+        /// <returns>A new <see cref="World" /> with the same gravity, settings, bodies, fixtures and joints as this world.</returns>
+        public World Clone()
+        {
+            World clone = new World(_gravity)
+            {
+                Enabled = _enabled,
+                WarmStartingEnabled = _warmStartingEnabled,
+                SleepingAllowed = _sleepingAllowed,
+                ContinuousPhysicsEnabled = _continuousPhysicsEnabled,
+                EnableDiagnostics = _enableDiagnostics
+            };
+
+            WorldCloner.Clone(this, clone);
+            return clone;
+        }
+
+        /// <summary>
+        /// Captures the state of this world into an immutable snapshot. The snapshot only holds data (no live engine
+        /// objects), so later changes to the world cannot mutate it, and mutating the snapshot cannot mutate the world.
+        /// </summary>
+        public WorldSnapshot CreateSnapshot()
+        {
+            return WorldSnapshot.Capture(this);
+        }
+
+        /// <summary>
+        /// Rebuilds this world from a snapshot. All bodies, fixtures, joints and contacts currently in the world are
+        /// destroyed first, so objects referenced by the previous state can never survive alongside the restored ones. The
+        /// snapshot itself is never modified; restoring it multiple times or restoring the same snapshot into several worlds
+        /// produces independent worlds that share no mutable state. A corrupt snapshot throws before any existing object is
+        /// removed, leaving the current world untouched.
+        /// </summary>
+        public void RestoreSnapshot(WorldSnapshot snapshot)
+        {
+            if (snapshot == null)
+                throw new ArgumentNullException(nameof(snapshot));
+
+            // Validate the snapshot against a fresh, temporary world first. If the snapshot data is corrupt
+            // (bad body/joint indices, unsupported joint types, ...), this throws and the current world is
+            // left completely untouched.
+            World validationWorld = new World(snapshot.Gravity);
+            snapshot.ApplyTo(validationWorld);
+            validationWorld.Clear();
+
+            // The snapshot was valid. Tear down the current state before replacing it.
+            Clear();
+
+            _gravity = snapshot.Gravity;
+            _enabled = snapshot.Enabled;
+            _warmStartingEnabled = snapshot.WarmStartingEnabled;
+            _sleepingAllowed = snapshot.SleepingAllowed;
+            _continuousPhysicsEnabled = snapshot.ContinuousPhysicsEnabled;
+            _enableDiagnostics = snapshot.EnableDiagnostics;
+
+            // Build a brand new object graph directly inside this world. The snapshot is only read, so
+            // this can be repeated and never hands out one of its own objects.
+            snapshot.ApplyTo(this);
+        }
+
+        /// <summary>
+        /// Adds a body that was constructed together with its fixtures outside of the normal
+        /// <see cref="Body.AddFixture" /> flow (used by cloning and snapshot restore). Creates the broad-phase proxies for
+        /// every fixture of an enabled body, exactly as <see cref="Body.AddFixture" /> would have done.
+        /// </summary>
+        internal void AddBodyWithProxies(Body body)
+        {
+            AddBodyInternal(body);
+
+            if ((body._flags & BodyFlags.Enabled) != BodyFlags.Enabled)
+                return;
+
+            IBroadPhase broadPhase = _contactManager.BroadPhase;
+            for (int i = 0; i < body._fixtureList.Count; i++)
+            {
+                body._fixtureList[i].CreateProxies(broadPhase, ref body._xf);
+            }
+
+            _newContacts = true;
+        }
+
         internal void RaiseNewFixtureEvent(Fixture fixture)
         {
             FixtureAdded?.Invoke(fixture);

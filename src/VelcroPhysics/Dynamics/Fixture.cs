@@ -101,6 +101,87 @@ namespace Genbox.VelcroPhysics.Dynamics
             //m_density = def->density;
         }
 
+        /// <summary>Used by <see cref="WorldCloner" /> to create an instance whose state is copied field by field.</summary>
+        internal Fixture()
+        {
+        }
+
+        /// <summary>Creates a deep copy of this fixture (including a cloned shape) attached to <paramref name="newBody" />.</summary>
+        internal Fixture CloneDeep(Body newBody)
+        {
+            Fixture copy = new Fixture
+            {
+                _friction = _friction,
+                _restitution = _restitution,
+                _restitutionThreshold = _restitutionThreshold,
+                _collisionGroup = _collisionGroup,
+                _collisionCategories = _collisionCategories,
+                _collidesWith = _collidesWith,
+                _ignoreCcdWith = _ignoreCcdWith,
+                _isSensor = _isSensor,
+                _shape = _shape.Clone(),
+                _body = newBody,
+                _proxyCount = 0,
+                _userData = _userData
+            };
+
+            copy._proxies = new FixtureProxy[copy._shape.ChildCount];
+            for (int i = 0; i < copy._proxies.Length; i++)
+            {
+                copy._proxies[i].ProxyId = DynamicTreeBroadPhase.NullProxy;
+                copy._proxies[i].Fixture = null;
+            }
+
+            return copy;
+        }
+
+        /// <summary>Rebuilds a fixture from a <see cref="FixtureSnapshot" /> and attaches it to <paramref name="body" />.</summary>
+        internal static Fixture CreateFromSnapshot(FixtureSnapshot snapshot, Body body)
+        {
+            Fixture fixture = new Fixture
+            {
+                _friction = snapshot.Friction,
+                _restitution = snapshot.Restitution,
+                _restitutionThreshold = snapshot.RestitutionThreshold,
+                _collisionGroup = snapshot.CollisionGroup,
+                _collisionCategories = snapshot.CollisionCategories,
+                _collidesWith = snapshot.CollidesWith,
+                _ignoreCcdWith = snapshot.IgnoreCcdWith,
+                _isSensor = snapshot.IsSensor,
+                _shape = snapshot.Shape.Clone(),
+                _body = body,
+                _proxyCount = 0,
+                _userData = snapshot.UserData
+            };
+
+            fixture._proxies = new FixtureProxy[fixture._shape.ChildCount];
+            for (int i = 0; i < fixture._proxies.Length; i++)
+            {
+                fixture._proxies[i].ProxyId = DynamicTreeBroadPhase.NullProxy;
+                fixture._proxies[i].Fixture = null;
+            }
+
+            return fixture;
+        }
+
+        /// <summary>Captures this fixture into a serializable <see cref="FixtureSnapshot" />. The shape is deep-copied.</summary>
+        internal FixtureSnapshot CreateSnapshot()
+        {
+            return new FixtureSnapshot
+            {
+                Friction = _friction,
+                Restitution = _restitution,
+                RestitutionThreshold = _restitutionThreshold,
+                CollisionGroup = _collisionGroup,
+                CollisionCategories = _collisionCategories,
+                CollidesWith = _collidesWith,
+                IgnoreCcdWith = _ignoreCcdWith,
+                IsSensor = _isSensor,
+                Shape = _shape.Clone(),
+                UserData = _userData
+            };
+        }
+
         public Category IgnoreCcdWith
         {
             get => _ignoreCcdWith;
