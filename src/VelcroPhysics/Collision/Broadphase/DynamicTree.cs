@@ -257,6 +257,48 @@ namespace Genbox.VelcroPhysics.Collision.Broadphase
             return _nodes[proxyId].UserData;
         }
 
+        /// <summary>Replace the user data of a proxy without touching the tree structure. Used to keep the user data in sync
+        /// with a proxy that moved (see <see cref="MoveProxy"/>).</summary>
+        /// <param name="proxyId">The proxy id.</param>
+        /// <param name="userData">The new user data.</param>
+        public void SetUserData(int proxyId, T userData)
+        {
+            Debug.Assert(0 <= proxyId && proxyId < _nodeCapacity);
+            Debug.Assert(_nodes[proxyId].IsLeaf());
+            _nodes[proxyId].UserData = userData;
+        }
+
+        /// <summary>Enumerate all leaf nodes (proxies) currently reachable from the root of the tree. Nodes that have been
+        /// destroyed are part of the free list and are never visited, even if their slots still contain old data.</summary>
+        /// <param name="callback">A callback called with the id of each live leaf. Return false to stop the enumeration.</param>
+        public void EnumerateLeaves(Func<int, bool> callback)
+        {
+            if (_root == NullNode)
+                return;
+
+            _queryStack.Clear();
+            _queryStack.Push(_root);
+
+            while (_queryStack.Count > 0)
+            {
+                int nodeId = _queryStack.Pop();
+                if (nodeId == NullNode)
+                    continue;
+
+                TreeNode<T> node = _nodes[nodeId];
+                if (node.IsLeaf())
+                {
+                    if (!callback(nodeId))
+                        return;
+                }
+                else
+                {
+                    _queryStack.Push(node.Child1);
+                    _queryStack.Push(node.Child2);
+                }
+            }
+        }
+
         /// <summary>Get the fat AABB for a proxy.</summary>
         /// <param name="proxyId">The proxy id.</param>
         /// <param name="fatAABB">The fat AABB.</param>

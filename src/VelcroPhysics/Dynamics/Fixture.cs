@@ -328,6 +328,10 @@ namespace Genbox.VelcroPhysics.Dynamics
                 FixtureProxy proxy = _proxies[i];
                 broadPhase.RemoveProxy(proxy.ProxyId);
                 proxy.ProxyId = DynamicTreeBroadPhase.NullProxy;
+
+                // Write the id back. FixtureProxy is a struct, so without this the array keeps the destroyed proxy id and
+                // later queries against the fixture would resurrect the stale id (which may have been recycled).
+                _proxies[i] = proxy;
             }
 
             _proxyCount = 0;
@@ -350,7 +354,11 @@ namespace Genbox.VelcroPhysics.Dynamics
 
                 Vector2 displacement = aabb2.Center - aabb1.Center;
 
-                broadPhase.MoveProxy(proxy.ProxyId, ref proxy.AABB, displacement);
+                broadPhase.MoveProxy(proxy.ProxyId, ref proxy, ref proxy.AABB, displacement);
+
+                // Write the updated proxy back. Without this the local AABB stays at its old position after a teleport,
+                // so the fixture, the broad-phase proxy and any query snapshots would disagree about where the body is.
+                _proxies[i] = proxy;
             }
         }
     }

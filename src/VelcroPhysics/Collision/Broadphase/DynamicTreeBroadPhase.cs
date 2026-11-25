@@ -21,6 +21,7 @@
 */
 
 using System;
+using System.Diagnostics;
 using Genbox.VelcroPhysics.Collision.Handlers;
 using Genbox.VelcroPhysics.Collision.RayCast;
 using Genbox.VelcroPhysics.Dynamics;
@@ -98,9 +99,14 @@ namespace Genbox.VelcroPhysics.Collision.Broadphase
         /// Call MoveProxy as many times as you like, then when you are done call UpdatePairs to finalized the proxy pairs
         /// (for your time step).
         /// </summary>
-        public void MoveProxy(int proxyId, ref AABB aabb, Vector2 displacement)
+        public void MoveProxy(int proxyId, ref FixtureProxy proxy, ref AABB aabb, Vector2 displacement)
         {
             bool buffer = _tree.MoveProxy(proxyId, ref aabb, displacement);
+
+            // Keep the user data stored in the leaf in sync with the proxy, including its updated AABB. Otherwise the
+            // broad-phase keeps serving a stale FixtureProxy (with the old AABB) through GetProxy and snapshots.
+            _tree.SetUserData(proxyId, proxy);
+
             if (buffer)
                 BufferMove(proxyId);
         }
@@ -204,6 +210,30 @@ namespace Genbox.VelcroPhysics.Collision.Broadphase
         public void RayCast(Func<RayCastInput, int, float> callback, ref RayCastInput input)
         {
             _tree.RayCast(callback, ref input);
+        }
+
+        /// <summary>
+        /// Capture a value-copied snapshot of every proxy currently in the broad-phase. Only leaves reachable from the
+        /// tree root are visited, so destroyed proxies are never part of the snapshot even if their pooled slots still hold
+        /// old data or the ids have been recycled.
+        /// </summary>
+        public BroadPhaseSnapshot CreateSnapshot()
+        {
+            BroadPhaseSnapshot.Entry[] entries = new BroadPhaseSnapshot.Entry[_proxyCount];
+            int count = 0;
+
+            _tree.EnumerateLeaves(proxyId =>
+            {
+                _tree.GetFatAABB(proxyId, out entries[count].FatAABB);
+                entries[count].Proxy = _tree.GetUserData(proxyId);
+                ++count;
+                return true;
+            });
+
+            // The tree only contains live leaves, so the number of visits must match the tracked proxy count.
+            Debug.Assert(count == _proxyCount);
+
+            return new BroadPhaseSnapshot(entries);
         }
 
         /// <summary>Shift the world origin. Useful for large worlds.</summary>

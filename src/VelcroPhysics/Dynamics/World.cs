@@ -453,6 +453,16 @@ namespace Genbox.VelcroPhysics.Dynamics
         }
 
         /// <summary>
+        /// Capture an immutable, value-copied snapshot of every broad-phase proxy currently in the world. Teleports and
+        /// removals performed afterwards do not affect the snapshot, while queries against this world only see the current
+        /// proxies and never return removed ones.
+        /// </summary>
+        public BroadPhaseSnapshot CreateQuerySnapshot()
+        {
+            return _contactManager.BroadPhase.CreateSnapshot();
+        }
+
+        /// <summary>
         /// Query the world for all fixtures that potentially overlap the provided AABB. Use the overload with a callback
         /// for filtering and better performance.
         /// </summary>
