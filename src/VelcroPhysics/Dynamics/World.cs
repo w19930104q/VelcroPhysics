@@ -374,10 +374,14 @@ namespace Genbox.VelcroPhysics.Dynamics
                 _timerPool.ReturnToPool(timer);
             }
 
-            // Update contacts. This is where some contacts are destroyed.
+            // Update contacts. This is where some contacts are destroyed. During a continuous step
+            // all contact callbacks are deferred to the TOI pass so every event can be ordered by its
+            // actual time of impact; with continuous physics off they fire here in the normal discrete way.
             {
                 Stopwatch timer = _timerPool.GetFromPool(true);
+                _contactManager._suppressContactCallbacks = _continuousPhysicsEnabled;
                 _contactManager.Collide();
+                _contactManager._suppressContactCallbacks = false;
                 _profile.Collide = timer.ElapsedTicks;
                 _timerPool.ReturnToPool(timer);
             }
@@ -839,7 +843,8 @@ namespace Genbox.VelcroPhysics.Dynamics
                     b.SynchronizeFixtures();
                 }
 
-                // Look for new contacts.
+                // Look for new contacts. These contacts will be evaluated by Collide() at the start of
+                // the next step; the TOI pass also refreshes any that come into existence inside it.
                 _contactManager.FindNewContacts();
                 _profile.Broadphase = timer.ElapsedTicks;
                 _timerPool.ReturnToPool(timer);
@@ -861,7 +866,7 @@ namespace Genbox.VelcroPhysics.Dynamics
                 for (Contact c = _contactManager._contactList; c != null; c = c._next)
                 {
                     // Invalidate TOI
-                    c._flags &= ~(ContactFlags.TOIFlag | ContactFlags.IslandFlag);
+                    c._flags &= ~(ContactFlags.TOIFlag | ContactFlags.IslandFlag | ContactFlags.RefreshedFlag);
                     c._toiCount = 0;
                     c._toi = 1.0f;
                 }
@@ -895,8 +900,10 @@ namespace Genbox.VelcroPhysics.Dynamics
                         Fixture fA = c._fixtureA;
                         Fixture fB = c._fixtureB;
 
-                        // Is there a sensor?
-                        if (fA._isSensor || fB._isSensor)
+                        // Sensor contacts that already produced their (begin or end) event at their
+                        // actual time of impact do not participate again in this step.
+                        bool isSensor = fA._isSensor || fB._isSensor;
+                        if (isSensor && (c._flags & ContactFlags.BulletHitFlag) == ContactFlags.BulletHitFlag)
                             continue;
 
                         Body bA = fA.Body;
@@ -937,7 +944,9 @@ namespace Genbox.VelcroPhysics.Dynamics
 
                         Debug.Assert(alpha0 < 1.0f);
 
-                        // Compute the time of impact in interval [0, minTOI]
+                        // Compute the time of impact in interval [0, minTOI]. The same time interval
+                        // calculation is used for sensors and solid contacts so that both kinds of
+                        // events can be ordered together by their actual time of impact.
                         TOIInput input = new TOIInput();
                         input.ProxyA = new DistanceProxy(fA.Shape, c.ChildIndexA);
                         input.ProxyB = new DistanceProxy(fB.Shape, c.ChildIndexB);
@@ -955,7 +964,10 @@ namespace Genbox.VelcroPhysics.Dynamics
                             alpha = 1.0f;
 
                         c._toi = alpha;
-                        c._flags &= ~ContactFlags.TOIFlag;
+                        // Cache the TOI for the remaining sweeps of this step instead of recomputing it.
+                        // A cached value must never survive a body displacement: the code below clears
+                        // TOIFlag for every contact of a displaced body.
+                        c._flags |= ContactFlags.TOIFlag;
                     }
 
                     if (alpha < minAlpha)
@@ -985,9 +997,32 @@ namespace Genbox.VelcroPhysics.Dynamics
                 bA0.Advance(minAlpha);
                 bB0.Advance(minAlpha);
 
-                // The TOI contact likely has some new contact points.
-                minContact.Update(_contactManager);
+                // The TOI contact likely has some new contact points. Callbacks are suppressed here and
+                // any begin/end transition is recorded as a pending flag stamped with the actual time of
+                // impact (minAlpha). The world emits all deferred events in time order after the loop.
+                minContact.Update(_contactManager, false, minAlpha);
                 minContact._flags &= ~ContactFlags.TOIFlag;
+                minContact._flags |= ContactFlags.RefreshedFlag;
+
+                // A sensor never generates constraints or impulses. Its only job in the TOI pass is to
+                // record its begin/end event at the actual time of impact, then give the bodies their
+                // full-step sweeps back so solid contacts keep their own timeline.
+                if (fA1._isSensor || fB1._isSensor)
+                {
+                    // Restore the sweeps to their pre-advance state. Sensors do not move bodies.
+                    bA0._sweep = backup1;
+                    bB0._sweep = backup2;
+                    bA0.SynchronizeTransform();
+                    bB0.SynchronizeTransform();
+
+                    // The sweeps were rolled back, so the alpha computed against the advanced
+                    // sweeps is no longer meaningful. Drop the cached TOI (it gets recomputed on
+                    // the next scan) and consume the sensor contact for this step.
+                    minContact._flags &= ~ContactFlags.TOIFlag;
+                    minContact._flags |= ContactFlags.BulletHitFlag;
+                    continue;
+                }
+
                 ++minContact._toiCount;
 
                 // Is the contact solid?
@@ -1053,8 +1088,10 @@ namespace Genbox.VelcroPhysics.Dynamics
                             if (!other.IsIsland)
                                 other.Advance(minAlpha);
 
-                            // Update the contact points
-                            contact.Update(_contactManager);
+                            // Update the contact points. Only refresh manifolds here; the island
+                            // solver reports the solid contact through PostSolve instead.
+                            contact.Update(_contactManager, false);
+                            contact._flags |= ContactFlags.RefreshedFlag;
 
                             // Was the contact disabled by the user?
                             if (!contact.Enabled)
@@ -1122,12 +1159,71 @@ namespace Genbox.VelcroPhysics.Dynamics
                 // Also, some contacts can be destroyed.
                 _contactManager.FindNewContacts();
 
+                // Contacts born here never went through Collide(); evaluate them silently so their
+                // begin event is recorded at this iteration's time of impact for ordered reporting.
+                _contactManager.RefreshNewContacts(minAlpha);
+
                 if (Settings.EnableSubStepping)
                 {
                     _stepComplete = false;
                     break;
                 }
             }
+
+            if (_stepComplete)
+                ReportDeferredTransitions();
+        }
+
+        /// <summary>
+        /// Reports the begin/end transitions that were recorded as pending flags while callbacks were
+        /// suppressed. Sensor contacts are always deferred; solid contacts created inside the TOI loop
+        /// missed the discrete Collide() pass and are deferred too. The pending events are emitted
+        /// sorted by the time of impact stamped on each contact, so the whole step produces one
+        /// consistent, time-ordered stream instead of contact-list-ordered events.
+        /// </summary>
+        private void ReportDeferredTransitions()
+        {
+            // One authoritative end-of-step evaluation per sensor contact. Pending flags recorded
+            // earlier in the step (e.g. a sensor begin observed at its time of impact) are sticky and
+            // survive this refresh; a separation observed here (a bullet that fully crossed a thin
+            // sensor) adds a pending end. Solid contacts are excluded: their transitions were already
+            // recorded as pending by the silent Collide() pass or RefreshNewContacts(), and evaluating
+            // them again at end-of-step transforms would risk a duplicated or mis-timed event.
+            for (Contact c = _contactManager._contactList; c != null; c = c._next)
+            {
+                if (!c._fixtureA._isSensor && !c._fixtureB._isSensor)
+                    continue;
+
+                c._flags &= ~ContactFlags.BulletHitFlag;
+                c.Update(_contactManager, false);
+            }
+
+            // Collect contacts that hold a deferred event and emit them sorted by time of impact, so
+            // the whole step produces one consistent, time-ordered stream instead of contact-list order.
+            List<Contact> pending = new List<Contact>();
+            for (Contact c = _contactManager._contactList; c != null; c = c._next)
+            {
+                if (c.HasPendingCallbacks)
+                    pending.Add(c);
+            }
+
+            pending.Sort((x, y) =>
+            {
+                // Begin events carry the primary time of impact; a contact with no pending begin
+                // sorts by its end event time.
+                float ax = (x._flags & ContactFlags.PendingBeginFlag) == ContactFlags.PendingBeginFlag
+                    ? x._beginEventAlpha
+                    : x._endEventAlpha;
+                float ay = (y._flags & ContactFlags.PendingBeginFlag) == ContactFlags.PendingBeginFlag
+                    ? y._beginEventAlpha
+                    : y._endEventAlpha;
+
+                int cmp = ax.CompareTo(ay);
+                return cmp != 0 ? cmp : x.GetHashCode().CompareTo(y.GetHashCode());
+            });
+
+            for (int i = 0; i < pending.Count; i++)
+                pending[i].FirePendingCallbacks(_contactManager);
         }
 
         private bool TestPointCallback(Fixture fixture)

@@ -98,6 +98,14 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
         internal int _toiCount;
         internal float _toi;
 
+        /// <summary>
+        /// Normalized time (alpha in [0,1]) at which the pending begin/end events were observed.
+        /// Used by the world to emit deferred sensor and solid contact events in true time-of-impact
+        /// order instead of contact list order.
+        /// </summary>
+        internal float _beginEventAlpha = 1.0f;
+        internal float _endEventAlpha = 1.0f;
+
         private ContactType _type;
 
         internal float _friction;
@@ -225,7 +233,17 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
             _nodeB.Next = null;
             _nodeB.Other = null;
 
+            // A pooled contact must not carry a cached time of impact from a
+            // previous life into a new fixture pair. Otherwise the solid
+            // collision of the new pair could be ordered/positioned by a TOI
+            // that belonged to an entirely different historical contact.
+            _toi = 1.0f;
             _toiCount = 0;
+            _beginEventAlpha = 1.0f;
+            _endEventAlpha = 1.0f;
+            _flags &= ~(ContactFlags.TOIFlag | ContactFlags.BulletHitFlag |
+                        ContactFlags.PendingBeginFlag | ContactFlags.PendingEndFlag |
+                        ContactFlags.RefreshedFlag);
 
             //Velcro: We only set the friction and restitution if we are not resetting the contact
             if (_fixtureA != null && _fixtureB != null)
@@ -243,7 +261,16 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
         /// valid.
         /// </summary>
         /// <param name="contactManager">The contact manager.</param>
-        internal void Update(ContactManager contactManager)
+        /// <param name="fireCallbacks">
+        /// When false, only the touching state and manifold are refreshed and no begin/end contact callbacks are fired.
+        /// The continuous collision (TOI) pass uses this so that sensor and solid events can be fired once, at the
+        /// actual time of impact, instead of at the discrete solver's end-of-step state.
+        /// </param>
+        /// <param name="eventAlpha">
+        /// Normalized time of impact for a transition observed during a silent refresh. Stamped onto the pending
+        /// event so the world can emit deferred events in time order.
+        /// </param>
+        internal void Update(ContactManager contactManager, bool fireCallbacks = true, float eventAlpha = 1.0f)
         {
             //Velcro: Do not try and update destroyed contacts
             if (_fixtureA == null || _fixtureB == null)
@@ -318,6 +345,73 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
 
             if (wasTouching == false && touching)
             {
+                if (fireCallbacks)
+                {
+                    //Velcro: Report the collision to both fixtures:
+                    _fixtureA.OnCollision?.Invoke(_fixtureA, _fixtureB, this);
+                    _fixtureB.OnCollision?.Invoke(_fixtureB, _fixtureA, this);
+
+                    //Velcro: Report the collision to both bodies:
+                    bodyA.OnCollision?.Invoke(_fixtureA, _fixtureB, this);
+                    bodyB.OnCollision?.Invoke(_fixtureB, _fixtureA, this);
+
+                    // Call BeginContact. It can disable the contact as well.
+                    contactManager.BeginContact?.Invoke(this);
+
+                    // Velcro: If the user disabled the contact (needed to exclude it in TOI solver) at any point by
+                    // any of the callbacks, we need to mark it as not touching and call any separation
+                    // callbacks for fixtures that didn't explicitly disable the collision.
+                    if (!Enabled)
+                        touching = false;
+                }
+                else
+                {
+                    // Remember the transition; the world reports it at the actual time of impact via
+                    // ReportDeferredTransitions(). The flag survives further silent refreshes until
+                    // FirePendingCallbacks() consumes it.
+                    _flags |= ContactFlags.PendingBeginFlag;
+                    _beginEventAlpha = eventAlpha;
+                }
+            }
+
+            if (wasTouching && !touching)
+            {
+                if (fireCallbacks)
+                {
+                    //Report the separation to both fixtures:
+                    _fixtureA.OnSeparation?.Invoke(_fixtureA, _fixtureB, this);
+                    _fixtureB.OnSeparation?.Invoke(_fixtureB, _fixtureA, this);
+
+                    //Report the separation to both bodies:
+                    bodyA.OnSeparation?.Invoke(_fixtureA, _fixtureB, this);
+                    bodyB.OnSeparation?.Invoke(_fixtureB, _fixtureA, this);
+
+                    contactManager.EndContact?.Invoke(this);
+                }
+                else
+                {
+                    _flags |= ContactFlags.PendingEndFlag;
+                    _endEventAlpha = eventAlpha;
+                }
+            }
+
+            if (fireCallbacks && !sensor && touching)
+                contactManager.PreSolve?.Invoke(this, ref oldManifold);
+        }
+
+        /// <summary>
+        /// Fires the begin/end contact callbacks for the current touching state without re-evaluating the shapes.
+        /// Used by the continuous collision (TOI) pass: the touching transition was already detected at the actual
+        /// time of impact, but the bodies have since been moved back to their end-of-step transforms, so evaluating
+        /// again would lose that transition.
+        /// </summary>
+        internal void FireTouchCallbacks(ContactManager contactManager, bool touching)
+        {
+            Body bodyA = _fixtureA.Body;
+            Body bodyB = _fixtureB.Body;
+
+            if (touching)
+            {
                 //Velcro: Report the collision to both fixtures:
                 _fixtureA.OnCollision?.Invoke(_fixtureA, _fixtureB, this);
                 _fixtureB.OnCollision?.Invoke(_fixtureB, _fixtureA, this);
@@ -328,15 +422,8 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
 
                 // Call BeginContact. It can disable the contact as well.
                 contactManager.BeginContact?.Invoke(this);
-
-                // Velcro: If the user disabled the contact (needed to exclude it in TOI solver) at any point by
-                // any of the callbacks, we need to mark it as not touching and call any separation
-                // callbacks for fixtures that didn't explicitly disable the collision.
-                if (!Enabled)
-                    touching = false;
             }
-
-            if (wasTouching && !touching)
+            else
             {
                 //Report the separation to both fixtures:
                 _fixtureA.OnSeparation?.Invoke(_fixtureA, _fixtureB, this);
@@ -348,10 +435,30 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
 
                 contactManager.EndContact?.Invoke(this);
             }
-
-            if (!sensor && touching)
-                contactManager.PreSolve?.Invoke(this, ref oldManifold);
         }
+
+        /// <summary>
+        /// Reports and clears begin/end transitions that were recorded while callbacks were
+        /// suppressed. Both can be pending for a fast body that crosses a thin sensor within one
+        /// step; begin is always emitted before end.
+        /// </summary>
+        internal void FirePendingCallbacks(ContactManager contactManager)
+        {
+            if ((_flags & ContactFlags.PendingBeginFlag) == ContactFlags.PendingBeginFlag)
+            {
+                FireTouchCallbacks(contactManager, true);
+                _flags &= ~ContactFlags.PendingBeginFlag;
+            }
+
+            if ((_flags & ContactFlags.PendingEndFlag) == ContactFlags.PendingEndFlag)
+            {
+                FireTouchCallbacks(contactManager, false);
+                _flags &= ~ContactFlags.PendingEndFlag;
+            }
+        }
+
+        internal bool HasPendingCallbacks =>
+            (_flags & (ContactFlags.PendingBeginFlag | ContactFlags.PendingEndFlag)) != 0;
 
         /// <summary>Evaluate this contact with your own manifold and transforms.</summary>
         /// <param name="manifold">The manifold.</param>

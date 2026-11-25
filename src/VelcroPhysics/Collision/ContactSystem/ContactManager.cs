@@ -33,6 +33,13 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
         internal int _contactCount;
         internal Contact _contactList;
 
+        /// <summary>
+        /// When true, the narrow-phase Collide() pass refreshes contacts without firing their
+        /// begin/end callbacks. The world sets this during a continuous physics step so the TOI pass can
+        /// emit every contact event (sensor and solid alike) ordered by its actual time of impact.
+        /// </summary>
+        internal bool _suppressContactCallbacks;
+
         /// <summary>Fires when a contact is created</summary>
         public BeginContactHandler BeginContact;
 
@@ -173,6 +180,28 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
         internal void FindNewContacts()
         {
             BroadPhase.UpdatePairs(OnBroadphaseCollision);
+        }
+
+        /// <summary>
+        /// Evaluates contacts that were created by a broad-phase pass but never went through
+        /// <see cref="Collide" /> (contacts born inside the TOI loop or the discrete Solve).
+        /// Callbacks are always suppressed: the begin/end transition is recorded as a pending flag
+        /// and emitted by the world in time-of-impact order, keeping solid and sensor events in a
+        /// single time-ordered stream.
+        /// </summary>
+        /// <param name="eventAlpha">
+        /// Time of impact to stamp on contacts born inside a TOI iteration; defaults to the end of step.
+        /// </param>
+        internal void RefreshNewContacts(float eventAlpha = 1.0f)
+        {
+            for (Contact c = _contactList; c != null; c = c._next)
+            {
+                if ((c._flags & ContactFlags.RefreshedFlag) == ContactFlags.RefreshedFlag)
+                    continue;
+
+                c._flags |= ContactFlags.RefreshedFlag;
+                c.Update(this, false, eventAlpha);
+            }
         }
 
         internal void Remove(Contact c)
@@ -316,8 +345,13 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
                     continue;
                 }
 
-                // The contact persists.
-                c.Update(this);
+                // The contact persists. When continuous physics runs, the world suppresses callbacks
+                // here (see _suppressContactCallbacks) so every begin/end transition is recorded as a
+                // pending flag and re-emitted in time-of-impact order by the TOI pass. With continuous
+                // physics off the flags stay clear and callbacks fire here in the normal discrete way.
+                // RefreshedFlag is intentionally not touched here: it only marks contacts born inside a
+                // broad-phase pass so the TOI code refreshes them.
+                c.Update(this, !_suppressContactCallbacks);
                 c = c._next;
             }
         }
