@@ -787,6 +787,11 @@ namespace Genbox.VelcroPhysics.Dynamics
                 _fixtureList[i].Synchronize(broadPhase, ref _xf, ref _xf);
             }
 
+            //Velcro: A body that is teleported must stay active so its contacts are re-evaluated on
+            //the next step. Otherwise a sleeping body moved out of a sensor keeps a stale contact that
+            //never reports an end event and remains queryable after the shapes have separated.
+            Awake = true;
+
             // Check for new contacts the next step
             _world._newContacts = true;
         }

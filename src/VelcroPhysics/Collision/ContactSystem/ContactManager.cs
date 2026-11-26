@@ -183,7 +183,10 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
             Fixture fixtureA = c._fixtureA;
             Fixture fixtureB = c._fixtureB;
 
-            //Velcro: When contacts are removed, we invoke OnSeparation
+            //Velcro: When a contact is removed while still touching (e.g. a body/fixture is deleted
+            //or a filter changes), the separation event could never be reported through Contact.Update.
+            //This is the safety net for that case. A contact that already separated inside Update had
+            //its TouchingFlag cleared there, so it cannot report a second end here.
             if (c.IsTouching)
             {
                 //Report the separation to both participants:

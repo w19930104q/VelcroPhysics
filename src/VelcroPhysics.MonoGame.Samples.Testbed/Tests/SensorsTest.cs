@@ -21,6 +21,8 @@
 // SOFTWARE.
 
 // This shows how to use sensor shapes. Sensors don't have collision, but report overlap events.
+// The scene contains two overlapping sensors; every body that enters the overlap region reports
+// a begin/update/end event against each sensor independently, and sensors never affect dynamics.
 
 using Genbox.VelcroPhysics.Collision.ContactSystem;
 using Genbox.VelcroPhysics.Collision.Shapes;
@@ -36,11 +38,12 @@ namespace Genbox.VelcroPhysics.MonoGame.Samples.Testbed.Tests
     internal class SensorsTest : Test
     {
         private const int _count = 7;
+        private const int _sensorCount = 2;
 
-        private readonly Fixture _sensor;
+        private readonly Fixture[] _sensors = new Fixture[_sensorCount];
         private readonly Body[] _bodies = new Body[_count];
         private readonly float _force;
-        private readonly bool[] _touching = new bool[_count];
+        private readonly bool[,] _touching = new bool[_sensorCount, _count];
 
         private SensorsTest()
         {
@@ -54,25 +57,18 @@ namespace Genbox.VelcroPhysics.MonoGame.Samples.Testbed.Tests
                     ground.AddFixture(shape);
                 }
 
-#if false
-			    {
-				    FixtureDef sd;
-				    sd.SetAsBox(10.0f, 2.0f, b2Vec2(0.0f, 20.0f), 0.0f);
-				    sd.isSensor = true;
-				    _sensor = ground.CreateFixture(sd);
-			    }
-#else
+                // Two overlapping circular sensors. Both report begin/end for the same moving body.
+                for (int s = 0; s < _sensorCount; s++)
                 {
                     CircleShape shape = new CircleShape(0.0f);
                     shape.Radius = 5.0f;
-                    shape.Position = new Vector2(0.0f, 10.0f);
+                    shape.Position = new Vector2(s == 0 ? -1.0f : 1.0f, 10.0f);
 
                     FixtureDef fd = new FixtureDef();
                     fd.Shape = shape;
                     fd.IsSensor = true;
-                    _sensor = ground.AddFixture(fd);
+                    _sensors[s] = ground.AddFixture(fd);
                 }
-#endif
             }
 
             {
@@ -86,7 +82,6 @@ namespace Genbox.VelcroPhysics.MonoGame.Samples.Testbed.Tests
                     bd.Position = new Vector2(-10.0f + 3.0f * i, 20.0f);
                     bd.UserData = i;
 
-                    _touching[i] = false;
                     _bodies[i] = BodyFactory.CreateFromDef(World, bd);
 
                     _bodies[i].AddFixture(shape);
@@ -102,82 +97,75 @@ namespace Genbox.VelcroPhysics.MonoGame.Samples.Testbed.Tests
         // Implement contact listener.
         private void BeginContact(Contact contact)
         {
-            Fixture fixtureA = contact.FixtureA;
-            Fixture fixtureB = contact.FixtureB;
-
-            if (fixtureA == _sensor)
+            for (int s = 0; s < _sensorCount; s++)
             {
-                int index = (int)fixtureB.Body.UserData;
-                if (index < _count)
-                    _touching[index] = true;
-            }
+                Fixture other = null;
 
-            if (fixtureB == _sensor)
-            {
-                int index = (int)fixtureA.Body.UserData;
-                if (index < _count)
-                    _touching[index] = true;
+                if (contact.FixtureA == _sensors[s])
+                    other = contact.FixtureB;
+                else if (contact.FixtureB == _sensors[s])
+                    other = contact.FixtureA;
+
+                if (other != null)
+                {
+                    int index = (int)other.Body.UserData;
+                    if (index < _count)
+                        _touching[s, index] = true;
+                }
             }
         }
 
         // Implement contact listener.
         private void EndContact(Contact contact)
         {
-            Fixture fixtureA = contact.FixtureA;
-            Fixture fixtureB = contact.FixtureB;
-
-            if (fixtureA == _sensor)
+            for (int s = 0; s < _sensorCount; s++)
             {
-                int index = (int)fixtureB.Body.UserData;
-                if (index < _count)
-                    _touching[index] = false;
-            }
+                Fixture other = null;
 
-            if (fixtureB == _sensor)
-            {
-                int index = (int)fixtureA.Body.UserData;
-                if (index < _count)
-                    _touching[index] = false;
+                if (contact.FixtureA == _sensors[s])
+                    other = contact.FixtureB;
+                else if (contact.FixtureB == _sensors[s])
+                    other = contact.FixtureA;
+
+                if (other != null)
+                {
+                    int index = (int)other.Body.UserData;
+                    if (index < _count)
+                        _touching[s, index] = false;
+                }
             }
         }
-
-        //void UpdateUI()
-        //{
-        //	ImGui::SetNextWindowPos(ImVec2(10.0f, 100.0f));
-        //	ImGui::SetNextWindowSize(ImVec2(200.0f, 60.0f));
-        //	ImGui::Begin("Sensor Controls", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
-
-        //	ImGui::SliderFloat("Force", _force, 0.0f, 2000.0f, "%.0f");
-
-        //	ImGui::End();
-        //}
 
         public override void Update(GameSettings settings, GameTime gameTime)
         {
             base.Update(settings, gameTime);
 
-            // Traverse the contact results. Apply a force on shapes
-            // that overlap the sensor.
-            for (int i = 0; i < _count; ++i)
+            // Traverse the contact results. Apply a force on shapes that overlap a sensor.
+            // Each sensor pushes toward its own center, so a body in the overlap region is
+            // affected by both sensors independently while dynamics remain sensor-free.
+            for (int s = 0; s < _sensorCount; s++)
             {
-                if (_touching[i] == false)
-                    continue;
-
-                Body body = _bodies[i];
-                Body ground = _sensor.Body;
-
-                CircleShape circle = (CircleShape)_sensor.Shape;
+                Fixture sensor = _sensors[s];
+                Body ground = sensor.Body;
+                CircleShape circle = (CircleShape)sensor.Shape;
                 Vector2 center = ground.GetWorldPoint(circle.Position);
 
-                Vector2 position = body.Position;
+                for (int i = 0; i < _count; ++i)
+                {
+                    if (_touching[s, i] == false)
+                        continue;
 
-                Vector2 d = center - position;
-                if (d.LengthSquared() < MathConstants.Epsilon * MathConstants.Epsilon)
-                    continue;
+                    Body body = _bodies[i];
+                    Vector2 position = body.Position;
 
-                d.Normalize();
-                Vector2 F = _force * d;
-                body.ApplyForce(F, position);
+                    Vector2 d = center - position;
+                    if (d.LengthSquared() < MathConstants.Epsilon * MathConstants.Epsilon)
+                        continue;
+
+                    d.Normalize();
+                    Vector2 F = _force * d;
+                    body.ApplyForce(F, position);
+                }
             }
         }
 

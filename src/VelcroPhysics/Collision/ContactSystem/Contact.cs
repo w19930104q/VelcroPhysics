@@ -331,7 +331,10 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
 
                 // Velcro: If the user disabled the contact (needed to exclude it in TOI solver) at any point by
                 // any of the callbacks, we need to mark it as not touching and call any separation
-                // callbacks for fixtures that didn't explicitly disable the collision.
+                // callbacks for fixtures that didn't explicitly disable the collision. The TouchingFlag is
+                // intentionally left set so the end event is still settled exactly once (in Contact.Update
+                // when the shapes separate, or in ContactManager.Remove if the contact is destroyed first),
+                // and a disabled contact that keeps overlapping does not raise a second begin.
                 if (!Enabled)
                     touching = false;
             }
@@ -349,7 +352,9 @@ namespace Genbox.VelcroPhysics.Collision.ContactSystem
                 contactManager.EndContact?.Invoke(this);
             }
 
-            if (!sensor && touching)
+            //Velcro: Sensors never produce a contact manifold, but they still raise a PreSolve event
+            //for every step the shapes overlap, so begin/update/end all settle against the same pair.
+            if (touching)
                 contactManager.PreSolve?.Invoke(this, ref oldManifold);
         }
 
