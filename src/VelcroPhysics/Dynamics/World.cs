@@ -263,22 +263,17 @@ namespace Genbox.VelcroPhysics.Dynamics
         /// <param name="delayUntilNextStep">If true, the joint is removed at next time step</param>
         public void RemoveJoint(Joint joint, bool delayUntilNextStep = false)
         {
-            if (delayUntilNextStep)
+            if (_isLocked || delayUntilNextStep)
             {
                 Debug.Assert(!_jointRemoveList.Contains(joint), "The joint is already marked for removal. You are removing the joint more than once.");
 
                 if (!_jointRemoveList.Contains(joint))
                     _jointRemoveList.Add(joint);
-            }
-            else
-            {
-                Debug.Assert(!_isLocked);
 
-                if (_isLocked)
-                    return;
-
-                RemoveJointInternal(joint);
+                return;
             }
+
+            RemoveJointInternal(joint);
         }
 
         public void AddController(Controller controller)
@@ -1237,6 +1232,8 @@ namespace Genbox.VelcroPhysics.Dynamics
                 bodyA._jointList = joint._edgeA.Next;
 
             joint._edgeA.Prev = null;
+            joint._edgeA.Other = null;
+            joint._edgeA.Joint = null;
             joint._edgeA.Next = null;
 
             // WIP David
@@ -1254,6 +1251,8 @@ namespace Genbox.VelcroPhysics.Dynamics
 
                 joint._edgeB.Prev = null;
                 joint._edgeB.Next = null;
+                joint._edgeB.Other = null;
+                joint._edgeB.Joint = null;
 
                 // If the joint prevents collisions, then flag any contacts for filtering.
                 if (!collideConnected)
@@ -1273,6 +1272,7 @@ namespace Genbox.VelcroPhysics.Dynamics
                 }
             }
 
+            joint.ResetConstraintCache();
             JointRemoved?.Invoke(joint);
         }
 

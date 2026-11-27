@@ -146,6 +146,11 @@ namespace Genbox.VelcroPhysics.Dynamics.Joints
             return 0.0f;
         }
 
+        internal override void ResetConstraintCache()
+        {
+            _impulse = Vector2.Zero;
+        }
+
         internal override void InitVelocityConstraints(ref SolverData data)
         {
             _indexA = _bodyA.IslandIndex;

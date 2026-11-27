@@ -173,6 +173,8 @@ namespace Genbox.VelcroPhysics.Dynamics.Joints
                    JointType == JointType.FixedFriction;
         }
 
+        /// <summary>Reset warm-start cache. Override in each joint type to clear accumulated impulses.</summary>
+        internal virtual void ResetConstraintCache() { }
         internal abstract void InitVelocityConstraints(ref SolverData data);
 
         internal void Validate(float invDt)
@@ -186,6 +188,8 @@ namespace Genbox.VelcroPhysics.Dynamics.Joints
                 return;
 
             _enabled = false;
+            ResetConstraintCache();
+            WakeBodies();
 
             Broke?.Invoke(this, (float)Math.Sqrt(jointErrorSquared));
         }
