@@ -65,6 +65,7 @@ namespace Genbox.VelcroPhysics.Dynamics
         internal JointEdge _jointList;
         internal ContactEdge _contactList;
         internal List<Fixture> _fixtureList;
+       internal int _filterUpdateCount;
 
         internal Body(BodyDef def)
         {
